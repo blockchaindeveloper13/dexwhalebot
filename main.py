@@ -81,7 +81,7 @@ async def check_new_pools(application):
                 pair_address = pool['Pair']['SmartContract']
                 pair_name = f"{pool['Pair']['Token0']['Symbol']}/{pool['Pair']['Token1']['Symbol']}"
                 message = f"🆕 YENİ HAVUZ! {pair_name} oluşturuldu, likidite: {liquidity}$ 🚀"
-                await application.bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
+                await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
         print(f"New pools check error: {e}")
 
@@ -149,7 +149,7 @@ async def send_entry_alert(trade, application):
     try:
         pair = f"{trade['Trade']['Buy']['Pair']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pair']['Token1']['Symbol']}"
         message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Buyer']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
-        await application.bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
+        await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
         print(f"Telegram send error: {e}")
 
@@ -233,7 +233,7 @@ async def send_exit_alert(trade, entry_amount, application):
         sell_amount = trade['Trade']['Sell']['Amount']
         remaining = await get_wallet_balance(trade['Trade']['Sell']['Seller'], trade['Trade']['Sell']['Currency']['SmartContract'])
         message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Seller']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
-        await application.bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
+        await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
         print(f"Telegram exit send error: {e}")
 
@@ -284,17 +284,17 @@ async def start(update: Update, context):
 
 async def monitor_whales():
     # Log environment variables for debugging
-    print(f"TELEGRAM_TOKEN: {os.getenv('TELEGRAM_TOKEN')}")
-    print(f"TELEGRAM_CHAT_ID: {os.getenv('TELEGRAM_CHAT_ID')}")
+    print(f"TELEGRAM_BOT_ID: {os.getenv('TELEGRAM_BOT_ID')}")
+    print(f"TELEGRAM_GROUP: {os.getenv('TELEGRAM_GROUP')}")
     print(f"BITQUERY_TOKEN: {os.getenv('BITQUERY_TOKEN')}")
     print(f"ENVIRONMENT: {os.getenv('ENVIRONMENT')}")
 
-    # Check if TELEGRAM_TOKEN is set
-    if not os.getenv('TELEGRAM_TOKEN'):
-        print("ERROR: TELEGRAM_TOKEN is not set!")
+    # Check if TELEGRAM_BOT_ID is set
+    if not os.getenv('TELEGRAM_BOT_ID'):
+        print("ERROR: TELEGRAM_BOT_ID is not set!")
         return
 
-    application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
+    application = Application.builder().token(os.getenv('TELEGRAM_BOT_ID')).build()
     application.add_handler(CommandHandler("start", start))
     
     # Start polling
