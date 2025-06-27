@@ -44,7 +44,7 @@ async def check_liquidity(pair_contract):
     url = "https://graphql.bitquery.io/"
     query = """query ($pair_contract: String!) {
         EVM(network: bsc) {
-            Pools(where: {Pair: {SmartContract: {is: $pair_contract}}}) {
+            Pools(where: {SmartContract: {is: $pair_contract}}) {
                 Liquidity { Value }
             }
         }
@@ -58,7 +58,7 @@ async def check_liquidity(pair_contract):
         if 'data' not in data or not data['data']['EVM']['Pools']:
             print(f"No liquidity data for pair: {pair_contract}")
             return 0
-        return data['data']['EVM']['Pools'][0]['Liquidity']['Value']
+        return float(data['data']['EVM']['Pools'][0]['Liquidity']['Value'])
     except Exception as e:
         print(f"Liquidity check error: {e}")
         return 0
@@ -68,11 +68,9 @@ async def check_new_pools(application):
     query = """query {
         EVM(network: bsc) {
             Pools(first: 10, orderBy: {descending: Block_Time}) {
-                Pair {
-                    SmartContract
-                    Token0 { Symbol }
-                    Token1 { Symbol }
-                }
+                SmartContract
+                Token0 { Symbol }
+                Token1 { Symbol }
                 Liquidity { Value }
             }
         }
@@ -87,10 +85,10 @@ async def check_new_pools(application):
             return
         pools = data['data']['EVM']['Pools']
         for pool in pools:
-            liquidity = pool['Liquidity']['Value']
+            liquidity = float(pool['Liquidity']['Value'])
             if 50000 <= liquidity <= 200000:
-                pair_address = pool['Pair']['SmartContract']
-                pair_name = f"{pool['Pair']['Token0']['Symbol']}/{pool['Pair']['Token1']['Symbol']}"
+                pair_address = pool['SmartContract']
+                pair_name = f"{pool['Token0']['Symbol']}/{pool['Token1']['Symbol']}"
                 message = f"🆕 YENİ HAVUZ! {pair_name} oluşturuldu, likidite: {liquidity}$ 🚀"
                 await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
@@ -124,10 +122,12 @@ async def bitquery_websocket(application):
                                     AmountInUSD
                                     Amount
                                     Currency { SmartContract Symbol }
-                                    Pool {
-                                        SmartContract
-                                        Token0 { Symbol }
-                                        Token1 { Symbol }
+                                    Dex {
+                                        Pool {
+                                            SmartContract
+                                            Token0 { Symbol }
+                                            Token1 { Symbol }
+                                        }
                                     }
                                 }
                             }
@@ -144,9 +144,9 @@ async def bitquery_websocket(application):
                     print(f"WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                        liquidity = await check_liquidity(trade['Trade']['Buy']['Pool']['SmartContract'])
+                        liquidity = await check_liquidity(trade['Trade']['Buy']['Dex']['Pool']['SmartContract'])
                         if 50000 <= liquidity <= 200000:
-                            pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
+                            pair = f"{trade['Trade']['Buy']['Dex']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Dex']['Pool']['Token1']['Symbol']}"
                             if check_notification_cooldown(trade['Trade']['Buy']['Buyer'], pair):
                                 await send_entry_alert(trade, application)
                                 await save_whale_address(trade)
@@ -162,7 +162,7 @@ async def bitquery_websocket(application):
 
 async def send_entry_alert(trade, application):
     try:
-        pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Dex']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Dex']['Pool']['Token1']['Symbol']}"
         message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Buyer']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
         await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
@@ -172,11 +172,11 @@ async def save_whale_address(trade):
     try:
         conn = sqlite3.connect('whales.db')
         c = conn.cursor()
-        pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Dex']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Dex']['Pool']['Token1']['Symbol']}"
         c.execute('''INSERT INTO whales (address, pair, token0_symbol, token1_symbol, amount_usd, token_amount, entry_time, last_notified, tracked)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (trade['Trade']['Buy']['Buyer'], pair,
-                   trade['Trade']['Buy']['Pool']['Token0']['Symbol'], trade['Trade']['Buy']['Pool']['Token1']['Symbol'],
+                   trade['Trade']['Buy']['Dex']['Pool']['Token0']['Symbol'], trade['Trade']['Buy']['Dex']['Pool']['Token1']['Symbol'],
                    trade['Trade']['Buy']['AmountInUSD'], trade['Trade']['Buy']['Amount'],
                    datetime.now().isoformat(), datetime.now().isoformat(), 1))
         conn.commit()
@@ -212,10 +212,12 @@ async def check_exit(whale_address, entry_amount, pair, application):
                                     AmountInUSD
                                     Amount
                                     Currency { SmartContract Symbol }
-                                    Pool {
-                                        SmartContract
-                                        Token0 { Symbol }
-                                        Token1 { Symbol }
+                                    Dex {
+                                        Pool {
+                                            SmartContract
+                                            Token0 { Symbol }
+                                            Token1 { Symbol }
+                                        }
                                     }
                                 }
                             }
@@ -248,7 +250,7 @@ async def check_exit(whale_address, entry_amount, pair, application):
 
 async def send_exit_alert(trade, entry_amount, application):
     try:
-        pair = f"{trade['Trade']['Sell']['Pool']['Token0']['Symbol']}/{trade['Trade']['Sell']['Pool']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Sell']['Dex']['Pool']['Token0']['Symbol']}/{trade['Trade']['Sell']['Dex']['Pool']['Token1']['Symbol']}"
         sell_amount = trade['Trade']['Sell']['Amount']
         remaining = await get_wallet_balance(trade['Trade']['Sell']['Seller'], trade['Trade']['Sell']['Currency']['SmartContract'])
         message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Seller']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
@@ -271,7 +273,7 @@ async def get_wallet_balance(address, pair_contract):
         response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
         response.raise_for_status()
         data = response.json()
-        return data['data']['EVM']['Balances'][0]['Balance'] if data['data']['EVM']['Balances'] else 0
+        return float(data['data']['EVM']['Balances'][0]['Balance']) if data['data']['EVM']['Balances'] else 0
     except Exception as e:
         print(f"Balance check error: {e}")
         return 0
@@ -301,6 +303,22 @@ def backup_db():
 async def start(update: Update, context):
     await update.message.reply_text("Whale Alert Bot aktif! Balina hareketleri ve yeni havuzlar izleniyor. 🐳")
 
+async def send_test_messages(application):
+    try:
+        # Test mesajı: Gruba
+        await application.bot.send_message(
+            chat_id=os.getenv('TELEGRAM_GROUP'),
+            text="🔔 TEST: Bot başarıyla deploy edildi! @dexwhale_group için hazır. 🚀"
+        )
+        # Test mesajı: Bota
+        await application.bot.send_message(
+            chat_id="@dexwhale_bot",
+            text="🔔 TEST: Bot başarıyla deploy edildi! @dexwhale_bot çalışıyor. 🚀"
+        )
+        print("Test messages sent successfully")
+    except Exception as e:
+        print(f"Error sending test messages: {e}")
+
 async def monitor_whales():
     # Log environment variables for debugging
     print(f"TELEGRAM_BOT_ID: {os.getenv('TELEGRAM_BOT_ID')}")
@@ -316,6 +334,9 @@ async def monitor_whales():
     application = Application.builder().token(os.getenv('TELEGRAM_BOT_ID')).build()
     application.add_handler(CommandHandler("start", start))
     
+    # Send test messages on deploy
+    await send_test_messages(application)
+    
     # Start polling with retry
     retry_count = 0
     max_retries = 5
@@ -323,7 +344,7 @@ async def monitor_whales():
         try:
             await application.initialize()
             await application.start()
-            await application.updater.start_polling(timeout=30)
+            await application.updater.start_polling(timeout=60)
             break
         except NetworkError as e:
             print(f"Telegram polling error: {e}")
