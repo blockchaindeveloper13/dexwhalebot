@@ -49,38 +49,48 @@ async def check_liquidity(pair_contract):
     }"""
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     variables = {"pair_contract": pair_contract}
-    response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-    data = response.json()
-    return data['data']['EVM']['Pools'][0]['Liquidity']['Value'] if data['data']['EVM']['Pools'] else 0
+    try:
+        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data['data']['EVM']['Pools'][0]['Liquidity']['Value'] if data['data']['EVM']['Pools'] else 0
+    except Exception as e:
+        print(f"Liquidity check error: {e}")
+        return 0
 
 async def bitquery_websocket():
-    uri = "wss://graphql.bitquery.io/v1/ws"
+    uri = "wss://streaming.bitquery.io/graphql"
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
-    async with websockets.connect(uri, extra_headers=headers) as ws:
-        query = """subscription {
-            EVM(network: bsc) {
-                DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: 100000}}}}) {
-                    Transaction { Hash }
-                    Trade {
-                        Buyer { Address }
-                        AmountInUSD
-                        Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
-                        Amount
+    try:
+        async with websockets.connect(uri, extra_headers=headers) as ws:
+            query = """subscription {
+                EVM(network: bsc) {
+                    DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: 100000}}}}) {
+                        Transaction { Hash }
+                        Trade {
+                            Buyer { Address }
+                            AmountInUSD
+                            Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                            Amount
+                        }
                     }
                 }
-            }
-        }"""
-        await ws.send(json.dumps({"type": "start", "id": "1", "query": query}))
-        async for message in ws:
-            data = json.loads(message)
-            if data.get('type') == 'data' and data.get('payload', {}).get('data'):
-                trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                liquidity = await check_liquidity(trade['Pair']['SmartContract'])
-                if 50000 <= liquidity <= 200000:
-                    pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
-                    if check_notification_cooldown(trade['Buyer']['Address'], pair):
-                        await send_entry_alert(trade)
-                        await save_whale_address(trade)
+            }"""
+            await ws.send(json.dumps({"type": "start", "id": "1", "query": query}))
+            async for message in ws:
+                data = json.loads(message)
+                if data.get('type') == 'data' and data.get('payload', {}).get('data'):
+                    trade = data['payload']['data']['EVM']['DEXTrades'][0]
+                    liquidity = await check_liquidity(trade['Pair']['SmartContract'])
+                    if 50000 <= liquidity <= 200000:
+                        pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
+                        if check_notification_cooldown(trade['Buyer']['Address'], pair):
+                            await send_entry_alert(trade)
+                            await save_whale_address(trade)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await asyncio.sleep(60)
+        await bitquery_websocket()  # Retry
 
 async def send_entry_alert(trade):
     bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
@@ -102,32 +112,37 @@ async def save_whale_address(trade):
     conn.close()
 
 async def check_exit(whale_address, entry_amount, pair):
-    uri = "wss://graphql.bitquery.io/v1/ws"
+    uri = "wss://streaming.bitquery.io/graphql"
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
-    async with websockets.connect(uri, extra_headers=headers) as ws:
-        query = """subscription ($whale_address: String!) {
-            EVM(network: bsc) {
-                DEXTrades(where: {Trade: {Sell: {Seller: {Address: {is: $whale_address}}}}}) {
-                    Transaction { Hash }
-                    Trade {
-                        Seller { Address }
-                        AmountInUSD
-                        Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
-                        Amount
+    try:
+        async with websockets.connect(uri, extra_headers=headers) as ws:
+            query = """subscription ($whale_address: String!) {
+                EVM(network: bsc) {
+                    DEXTrades(where: {Trade: {Sell: {Seller: {Address: {is: $whale_address}}}}}) {
+                        Transaction { Hash }
+                        Trade {
+                            Seller { Address }
+                            AmountInUSD
+                            Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                            Amount
+                        }
                     }
                 }
-            }
-        }"""
-        variables = {"whale_address": whale_address}
-        await ws.send(json.dumps({"type": "start", "id": "2", "query": query, "variables": variables}))
-        async for message in ws:
-            data = json.loads(message)
-            if data.get('type') == 'data' and data.get('payload', {}).get('data'):
-                trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                if trade['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Seller']['Address'], pair):
-                    await send_exit_alert(trade, entry_amount)
-                    update_whale_status(trade['Seller']['Address'])
-                    break
+            }"""
+            variables = {"whale_address": whale_address}
+            await ws.send(json.dumps({"type": "start", "id": "2", "query": query, "variables": variables}))
+            async for message in ws:
+                data = json.loads(message)
+                if data.get('type') == 'data' and data.get('payload', {}).get('data'):
+                    trade = data['payload']['data']['EVM']['DEXTrades'][0]
+                    if trade['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Seller']['Address'], pair):
+                        await send_exit_alert(trade, entry_amount)
+                        update_whale_status(trade['Seller']['Address'])
+                        break
+    except Exception as e:
+        print(f"Exit WebSocket error: {e}")
+        await asyncio.sleep(60)
+        await check_exit(whale_address, entry_amount, pair)  # Retry
 
 async def send_exit_alert(trade, entry_amount):
     bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
@@ -148,9 +163,14 @@ async def get_wallet_balance(address, pair_contract):
     }"""
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     variables = {"address": address, "pair_contract": pair_contract}
-    response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-    data = response.json()
-    return data['data']['EVM']['Balances'][0]['Balance'] if data['data']['EVM']['Balances'] else 0
+    try:
+        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data['data']['EVM']['Balances'][0]['Balance'] if data['data']['EVM']['Balances'] else 0
+    except Exception as e:
+        print(f"Balance check error: {e}")
+        return 0
 
 def update_whale_status(address):
     conn = sqlite3.connect('whales.db')
@@ -169,28 +189,33 @@ def backup_db():
     conn.close()
 
 async def monitor_new_pools():
-    uri = "wss://graphql.bitquery.io/v1/ws"
+    uri = "wss://streaming.bitquery.io/graphql"
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
-    async with websockets.connect(uri, extra_headers=headers) as ws:
-        query = """subscription {
-            EVM(network: bsc) {
-                PairCreated {
-                    Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+    try:
+        async with websockets.connect(uri, extra_headers=headers) as ws:
+            query = """subscription {
+                EVM(network: bsc) {
+                    PairCreated {
+                        Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                    }
                 }
-            }
-        }"""
-        await ws.send(json.dumps({"type": "start", "id": "3", "query": query}))
-        async for message in ws:
-            data = json.loads(message)
-            if data.get('type') == 'data' and data.get('payload', {}).get('data'):
-                pair = data['payload']['data']['EVM']['PairCreated'][0]['Pair']
-                pair_address = pair['SmartContract']
-                pair_name = f"{pair['Token0']['Symbol']}/{pair['Token1']['Symbol']}"
-                liquidity = await check_liquidity(pair_address)
-                if 50000 <= liquidity <= 200000:
-                    message = f"🆕 YENİ HAVUZ! {pair_name} oluşturuldu, likidite: {liquidity}$ 🚀"
-                    bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-                    await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
+            }"""
+            await ws.send(json.dumps({"type": "start", "id": "3", "query": query}))
+            async for message in ws:
+                data = json.loads(message)
+                if data.get('type') == 'data' and data.get('payload', {}).get('data'):
+                    pair = data['payload']['data']['EVM']['PairCreated'][0]['Pair']
+                    pair_address = pair['SmartContract']
+                    pair_name = f"{pair['Token0']['Symbol']}/{pair['Token1']['Symbol']}"
+                    liquidity = await check_liquidity(pair_address)
+                    if 50000 <= liquidity <= 200000:
+                        message = f"🆕 YENİ HAVUZ! {pair_name} oluşturuldu, likidite: {liquidity}$ 🚀"
+                        bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
+                        await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
+    except Exception as e:
+        print(f"New pools WebSocket error: {e}")
+        await asyncio.sleep(60)
+        await monitor_new_pools()  # Retry
 
 async def monitor_whales():
     init_db()
