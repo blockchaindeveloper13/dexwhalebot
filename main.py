@@ -69,7 +69,6 @@ async def bitquery_websocket():
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
-                # Initialize connection
                 await ws.send(json.dumps({
                     "type": "connection_init",
                     "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
@@ -79,12 +78,15 @@ async def bitquery_websocket():
                 
                 query = """subscription {
                     EVM(network: bsc) {
-                        DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: 100000}}}}) {
+                        DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: "100000"}}}}) {
                             Transaction { Hash }
                             Trade {
-                                Buyer { Address }
-                                AmountInUSD
-                                Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                                Buy {
+                                    Address
+                                    AmountInUSD
+                                    Currency { SmartContract Symbol }
+                                    BaseCurrency { Symbol }
+                                }
                                 Amount
                             }
                         }
@@ -100,10 +102,10 @@ async def bitquery_websocket():
                     print(f"WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                        liquidity = await check_liquidity(trade['Pair']['SmartContract'])
+                        liquidity = await check_liquidity(trade['Trade']['Buy']['Currency']['SmartContract'])
                         if 50000 <= liquidity <= 200000:
-                            pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
-                            if check_notification_cooldown(trade['Buyer']['Address'], pair):
+                            pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
+                            if check_notification_cooldown(trade['Trade']['Buy']['Address'], pair):
                                 await send_entry_alert(trade)
                                 await save_whale_address(trade)
         except Exception as e:
@@ -119,8 +121,8 @@ async def bitquery_websocket():
 async def send_entry_alert(trade):
     try:
         bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-        pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
-        message = f"🐳 BALİNA GİRİŞİ! {trade['Buyer']['Address']} {pair} havuzunda {trade['AmountInUSD']}$ aldı! 🚀"
+        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
+        message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Address']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
         await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
     except Exception as e:
         print(f"Telegram send error: {e}")
@@ -129,12 +131,12 @@ async def save_whale_address(trade):
     try:
         conn = sqlite3.connect('whales.db')
         c = conn.cursor()
-        pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
         c.execute('''INSERT INTO whales (address, pair, token0_symbol, token1_symbol, amount_usd, token_amount, entry_time, last_notified, tracked)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (trade['Buyer']['Address'], pair,
-                   trade['Pair']['Token0']['Symbol'], trade['Pair']['Token1']['Symbol'],
-                   trade['AmountInUSD'], trade['Amount'],
+                  (trade['Trade']['Buy']['Address'], pair,
+                   trade['Trade']['Buy']['Currency']['Symbol'], trade['Trade']['Buy']['BaseCurrency']['Symbol'],
+                   trade['Trade']['Buy']['AmountInUSD'], trade['Trade']['Amount'],
                    datetime.now().isoformat(), datetime.now().isoformat(), 1))
         conn.commit()
         conn.close()
@@ -161,12 +163,15 @@ async def check_exit(whale_address, entry_amount, pair):
                 
                 query = """subscription ($whale_address: String!) {
                     EVM(network: bsc) {
-                        DEXTrades(where: {Trade: {Sell: {Seller: {Address: {is: $whale_address}}}}}) {
+                        DEXTrades(where: {Trade: {Sell: {Address: {is: $whale_address}}}}) {
                             Transaction { Hash }
                             Trade {
-                                Seller { Address }
-                                AmountInUSD
-                                Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                                Sell {
+                                    Address
+                                    AmountInUSD
+                                    Currency { SmartContract Symbol }
+                                    BaseCurrency { Symbol }
+                                }
                                 Amount
                             }
                         }
@@ -182,9 +187,9 @@ async def check_exit(whale_address, entry_amount, pair):
                     print(f"Exit WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                        if trade['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Seller']['Address'], pair):
+                        if trade['Trade']['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Trade']['Sell']['Address'], pair):
                             await send_exit_alert(trade, entry_amount)
-                            update_whale_status(trade['Seller']['Address'])
+                            update_whale_status(trade['Trade']['Sell']['Address'])
                             break
         except Exception as e:
             print(f"Exit WebSocket error: {e}")
@@ -199,10 +204,10 @@ async def check_exit(whale_address, entry_amount, pair):
 async def send_exit_alert(trade, entry_amount):
     try:
         bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-        pair = f"{trade['Pair']['Token0']['Symbol']}/{trade['Pair']['Token1']['Symbol']}"
-        sell_amount = trade['Amount']
-        remaining = await get_wallet_balance(trade['Seller']['Address'], trade['Pair']['SmartContract'])
-        message = f"🚨 BALİNA SATIŞI! {trade['Seller']['Address']} {pair} havuzunda {trade['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
+        pair = f"{trade['Trade']['Sell']['Currency']['Symbol']}/{trade['Trade']['Sell']['BaseCurrency']['Symbol']}"
+        sell_amount = trade['Trade']['Amount']
+        remaining = await get_wallet_balance(trade['Trade']['Sell']['Address'], trade['Trade']['Sell']['Currency']['SmartContract'])
+        message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Address']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
         await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
     except Exception as e:
         print(f"Telegram exit send error: {e}")
@@ -269,8 +274,8 @@ async def monitor_new_pools():
                 
                 query = """subscription {
                     EVM(network: bsc) {
-                        PairCreated {
-                            Pair { SmartContract Token0 { Symbol } Token1 { Symbol } }
+                        DEXPoolCreated {
+                            Pool { SmartContract Token0 { Symbol } Token1 { Symbol } }
                         }
                     }
                 }"""
@@ -283,7 +288,7 @@ async def monitor_new_pools():
                     data = json.loads(message)
                     print(f"New pools WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
-                        pair = data['payload']['data']['EVM']['PairCreated'][0]['Pair']
+                        pair = data['payload']['data']['EVM']['DEXPoolCreated'][0]['Pool']
                         pair_address = pair['SmartContract']
                         pair_name = f"{pair['Token0']['Symbol']}/{pair['Token1']['Symbol']}"
                         liquidity = await check_liquidity(pair_address)
