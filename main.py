@@ -60,15 +60,18 @@ async def check_liquidity(pair_contract):
 
 async def bitquery_websocket():
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
-        "Sec-WebSocket-Protocol": "graphql-ws"
-    }
+    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers) as ws:
+                # Initialize connection
+                await ws.send(json.dumps({"type": "connection_init"}))
+                # Wait for connection acknowledgement
+                init_response = await ws.recv()
+                print(f"WebSocket init response: {init_response}")
+                
                 query = """subscription {
                     EVM(network: bsc) {
                         DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: 100000}}}}) {
@@ -82,9 +85,14 @@ async def bitquery_websocket():
                         }
                     }
                 }"""
-                await ws.send(json.dumps({"type": "start", "id": "1", "query": query}))
+                await ws.send(json.dumps({
+                    "id": "1",
+                    "type": "start",
+                    "payload": {"query": query}
+                }))
                 async for message in ws:
                     data = json.loads(message)
+                    print(f"WebSocket message: {data}")  # Debug log
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
                         liquidity = await check_liquidity(trade['Pair']['SmartContract'])
@@ -130,15 +138,16 @@ async def save_whale_address(trade):
 
 async def check_exit(whale_address, entry_amount, pair):
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
-        "Sec-WebSocket-Protocol": "graphql-ws"
-    }
+    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers) as ws:
+                await ws.send(json.dumps({"type": "connection_init"}))
+                init_response = await ws.recv()
+                print(f"Exit WebSocket init response: {init_response}")
+                
                 query = """subscription ($whale_address: String!) {
                     EVM(network: bsc) {
                         DEXTrades(where: {Trade: {Sell: {Seller: {Address: {is: $whale_address}}}}}) {
@@ -152,10 +161,14 @@ async def check_exit(whale_address, entry_amount, pair):
                         }
                     }
                 }"""
-                variables = {"whale_address": whale_address}
-                await ws.send(json.dumps({"type": "start", "id": "2", "query": query, "variables": variables}))
+                await ws.send(json.dumps({
+                    "id": "2",
+                    "type": "start",
+                    "payload": {"query": query, "variables": {"whale_address": whale_address}}
+                }))
                 async for message in ws:
                     data = json.loads(message)
+                    print(f"Exit WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
                         if trade['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Seller']['Address'], pair):
@@ -227,15 +240,16 @@ def backup_db():
 
 async def monitor_new_pools():
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
-        "Sec-WebSocket-Protocol": "graphql-ws"
-    }
+    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers) as ws:
+                await ws.send(json.dumps({"type": "connection_init"}))
+                init_response = await ws.recv()
+                print(f"New pools WebSocket init response: {init_response}")
+                
                 query = """subscription {
                     EVM(network: bsc) {
                         PairCreated {
@@ -243,9 +257,14 @@ async def monitor_new_pools():
                         }
                     }
                 }"""
-                await ws.send(json.dumps({"type": "start", "id": "3", "query": query}))
+                await ws.send(json.dumps({
+                    "id": "3",
+                    "type": "start",
+                    "payload": {"query": query}
+                }))
                 async for message in ws:
                     data = json.loads(message)
+                    print(f"New pools WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         pair = data['payload']['data']['EVM']['PairCreated'][0]['Pair']
                         pair_address = pair['SmartContract']
