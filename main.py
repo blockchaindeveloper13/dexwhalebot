@@ -53,14 +53,16 @@ async def check_liquidity(pair_contract):
     variables = {"pair_contract": pair_contract}
     try:
         response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+        print(f"check_liquidity request for {pair_contract}: status={response.status_code}")
         response.raise_for_status()
         data = response.json()
+        print(f"check_liquidity response for {pair_contract}: {json.dumps(data, indent=2)}")
         if 'data' not in data or not data['data']['EVM']['Pools']:
             print(f"No liquidity data for pair: {pair_contract}")
             return 0
         return float(data['data']['EVM']['Pools'][0]['Liquidity']['Value'])
     except Exception as e:
-        print(f"Liquidity check error: {e}")
+        print(f"Liquidity check error for {pair_contract}: {e}")
         return 0
 
 async def check_new_pools(application):
@@ -78,9 +80,10 @@ async def check_new_pools(application):
     headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
     try:
         response = requests.post(url, json={"query": query}, headers=headers)
+        print(f"check_new_pools request: status={response.status_code}")
         response.raise_for_status()
         data = response.json()
-        print(f"Raw Bitquery Pools response: {json.dumps(data, indent=2)}")  # Ham response loglama
+        print(f"Raw Bitquery Pools response: {json.dumps(data, indent=2)}")
         if 'data' not in data or not data['data']['EVM']['Pools']:
             print("No pool data found")
             return
@@ -90,8 +93,8 @@ async def check_new_pools(application):
             liquidity = float(pool['Liquidity']['Value'])
             pair_address = pool['SmartContract']
             pair_name = f"{pool['Token0']['Symbol']}/{pool['Token1']['Symbol']}"
-            print(f"Pool: {pair_name}, Address: {pair_address}, Liquidity: {liquidity}$")  # Detaylı havuz loglama
-            if liquidity >= 100000:  # 100K $ ve üstü
+            print(f"Pool: {pair_name}, Address: {pair_address}, Liquidity: {liquidity}$")
+            if liquidity >= 100000:
                 message = f"🆕 YENİ HAVUZ! {pair_name} oluşturuldu, likidite: {liquidity}$ 🚀"
                 await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
@@ -99,19 +102,13 @@ async def check_new_pools(application):
 
 async def bitquery_websocket(application):
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}", "Content-Type": "application/json"}
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
-                await ws.send(json.dumps({
-                    "type": "connection_init",
-                    "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
-                }))
+                await ws.send(json.dumps({"type": "connection_init", "payload": {"headers": headers}}))
                 init_response = await ws.recv()
                 print(f"WebSocket init response: {init_response}")
                 
@@ -125,7 +122,7 @@ async def bitquery_websocket(application):
                                     AmountInUSD
                                     Amount
                                     Currency { SmartContract Symbol }
-                                    Pair {
+                                    Pool {
                                         SmartContract
                                         Token0 { Symbol }
                                         Token1 { Symbol }
@@ -135,19 +132,15 @@ async def bitquery_websocket(application):
                         }
                     }
                 }"""
-                await ws.send(json.dumps({
-                    "id": "1",
-                    "type": "start",
-                    "payload": {"query": query}
-                }))
+                await ws.send(json.dumps({"id": "1", "type": "start", "payload": {"query": query}}))
                 async for message in ws:
                     data = json.loads(message)
                     print(f"WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                        liquidity = await check_liquidity(trade['Trade']['Buy']['Pair']['SmartContract'])
-                        if liquidity >= 100000:  # 100K $ ve üstü
-                            pair = f"{trade['Trade']['Buy']['Pair']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pair']['Token1']['Symbol']}"
+                        liquidity = await check_liquidity(trade['Trade']['Buy']['Pool']['SmartContract'])
+                        if liquidity >= 100000:
+                            pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
                             if check_notification_cooldown(trade['Trade']['Buy']['Buyer'], pair):
                                 await send_entry_alert(trade, application)
                                 await save_whale_address(trade)
@@ -155,7 +148,7 @@ async def bitquery_websocket(application):
             print(f"WebSocket error: {e}")
             retry_count += 1
             if retry_count < max_retries:
-                print(f"Retrying in 60 seconds... ({retry_count}/{max_retries})")
+                print(f"Retrying in 60s... ({retry_count}/{max_retries})")
                 await asyncio.sleep(60)
             else:
                 print("Max retries reached, stopping WebSocket.")
@@ -163,7 +156,7 @@ async def bitquery_websocket(application):
 
 async def send_entry_alert(trade, application):
     try:
-        pair = f"{trade['Trade']['Buy']['Pair']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pair']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
         message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Buyer']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
         await application.bot.send_message(chat_id=os.getenv('TELEGRAM_GROUP'), text=message)
     except Exception as e:
@@ -173,11 +166,11 @@ async def save_whale_address(trade):
     try:
         conn = sqlite3.connect('whales.db')
         c = conn.cursor()
-        pair = f"{trade['Trade']['Buy']['Pair']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pair']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Pool']['Token0']['Symbol']}/{trade['Trade']['Buy']['Pool']['Token1']['Symbol']}"
         c.execute('''INSERT INTO whales (address, pair, token0_symbol, token1_symbol, amount_usd, token_amount, entry_time, last_notified, tracked)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (trade['Trade']['Buy']['Buyer'], pair,
-                   trade['Trade']['Buy']['Pair']['Token0']['Symbol'], trade['Trade']['Buy']['Pair']['Token1']['Symbol'],
+                   trade['Trade']['Buy']['Pool']['Token0']['Symbol'], trade['Trade']['Buy']['Pool']['Token1']['Symbol'],
                    trade['Trade']['Buy']['AmountInUSD'], trade['Trade']['Buy']['Amount'],
                    datetime.now().isoformat(), datetime.now().isoformat(), 1))
         conn.commit()
@@ -187,19 +180,13 @@ async def save_whale_address(trade):
 
 async def check_exit(whale_address, entry_amount, pair, application):
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}", "Content-Type": "application/json"}
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
             async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
-                await ws.send(json.dumps({
-                    "type": "connection_init",
-                    "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
-                }))
+                await ws.send(json.dumps({"type": "connection_init", "payload": {"headers": headers}}))
                 init_response = await ws.recv()
                 print(f"Exit WebSocket init response: {init_response}")
                 
@@ -213,7 +200,7 @@ async def check_exit(whale_address, entry_amount, pair, application):
                                     AmountInUSD
                                     Amount
                                     Currency { SmartContract Symbol }
-                                    Pair {
+                                    Pool {
                                         SmartContract
                                         Token0 { Symbol }
                                         Token1 { Symbol }
@@ -223,11 +210,7 @@ async def check_exit(whale_address, entry_amount, pair, application):
                         }
                     }
                 }"""
-                await ws.send(json.dumps({
-                    "id": "2",
-                    "type": "start",
-                    "payload": {"query": query, "variables": {"whale_address": whale_address}}
-                }))
+                await ws.send(json.dumps({"id": "2", "type": "start", "payload": {"query": query, "variables": {"whale_address": whale_address}}}))
                 async for message in ws:
                     data = json.loads(message)
                     print(f"Exit WebSocket message: {data}")
@@ -241,7 +224,7 @@ async def check_exit(whale_address, entry_amount, pair, application):
             print(f"Exit WebSocket error: {e}")
             retry_count += 1
             if retry_count < max_retries:
-                print(f"Retrying exit check in 60 seconds... ({retry_count}/{max_retries})")
+                print(f"Retrying exit check in 60s... ({retry_count}/{max_retries})")
                 await asyncio.sleep(60)
             else:
                 print("Max retries reached for exit check.")
@@ -249,7 +232,7 @@ async def check_exit(whale_address, entry_amount, pair, application):
 
 async def send_exit_alert(trade, entry_amount, application):
     try:
-        pair = f"{trade['Trade']['Sell']['Pair']['Token0']['Symbol']}/{trade['Trade']['Sell']['Pair']['Token1']['Symbol']}"
+        pair = f"{trade['Trade']['Sell']['Pool']['Token0']['Symbol']}/{trade['Trade']['Sell']['Pool']['Token1']['Symbol']}"
         sell_amount = trade['Trade']['Sell']['Amount']
         remaining = await get_wallet_balance(trade['Trade']['Sell']['Seller'], trade['Trade']['Sell']['Currency']['SmartContract'])
         message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Seller']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
@@ -270,11 +253,13 @@ async def get_wallet_balance(address, pair_contract):
     variables = {"address": address, "pair_contract": pair_contract}
     try:
         response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+        print(f"get_wallet_balance request for {address}, {pair_contract}: status={response.status_code}")
         response.raise_for_status()
         data = response.json()
+        print(f"get_wallet_balance response for {address}, {pair_contract}: {json.dumps(data, indent=2)}")
         return float(data['data']['EVM']['Balances'][0]['Balance']) if data['data']['EVM']['Balances'] else 0
     except Exception as e:
-        print(f"Balance check error: {e}")
+        print(f"Balance check error for {address}, {pair_contract}: {e}")
         return 0
 
 def update_whale_status(address):
@@ -304,7 +289,6 @@ async def start(update: Update, context):
 
 async def send_test_messages(application):
     try:
-        # Test mesajı: Sadece gruba
         await application.bot.send_message(
             chat_id=os.getenv('TELEGRAM_GROUP'),
             text="🔔 TEST: Bot başarıyla deploy edildi! @dexwhale_group için hazır. 🚀"
@@ -314,13 +298,11 @@ async def send_test_messages(application):
         print(f"Error sending test message to group: {e}")
 
 async def monitor_whales():
-    # Log environment variables for debugging
     print(f"TELEGRAM_BOT_ID: {os.getenv('TELEGRAM_BOT_ID')}")
     print(f"TELEGRAM_GROUP: {os.getenv('TELEGRAM_GROUP')}")
     print(f"BITQUERY_TOKEN: {os.getenv('BITQUERY_TOKEN')}")
     print(f"ENVIRONMENT: {os.getenv('ENVIRONMENT')}")
-
-    # Check if TELEGRAM_BOT_ID is set
+    
     if not os.getenv('TELEGRAM_BOT_ID'):
         print("ERROR: TELEGRAM_BOT_ID is not set!")
         return
@@ -328,10 +310,8 @@ async def monitor_whales():
     application = Application.builder().token(os.getenv('TELEGRAM_BOT_ID')).build()
     application.add_handler(CommandHandler("start", start))
     
-    # Send test message on deploy
     await send_test_messages(application)
     
-    # Start polling with retry
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
@@ -344,13 +324,12 @@ async def monitor_whales():
             print(f"Telegram polling error: {e}")
             retry_count += 1
             if retry_count < max_retries:
-                print(f"Retrying polling in 60 seconds... ({retry_count}/{max_retries})")
+                print(f"Retrying polling in 60s... ({retry_count}/{max_retries})")
                 await asyncio.sleep(60)
             else:
                 print("Max retries reached for Telegram polling.")
                 return
     
-    # Start monitoring tasks
     asyncio.create_task(bitquery_websocket(application))
     while True:
         try:
