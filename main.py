@@ -60,15 +60,20 @@ async def check_liquidity(pair_contract):
 
 async def bitquery_websocket():
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
+    headers = {
+        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
+        "Content-Type": "application/json"
+    }
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
-            async with websockets.connect(uri, extra_headers=headers) as ws:
+            async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
                 # Initialize connection
-                await ws.send(json.dumps({"type": "connection_init"}))
-                # Wait for connection acknowledgement
+                await ws.send(json.dumps({
+                    "type": "connection_init",
+                    "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
+                }))
                 init_response = await ws.recv()
                 print(f"WebSocket init response: {init_response}")
                 
@@ -92,7 +97,7 @@ async def bitquery_websocket():
                 }))
                 async for message in ws:
                     data = json.loads(message)
-                    print(f"WebSocket message: {data}")  # Debug log
+                    print(f"WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
                         liquidity = await check_liquidity(trade['Pair']['SmartContract'])
@@ -138,13 +143,19 @@ async def save_whale_address(trade):
 
 async def check_exit(whale_address, entry_amount, pair):
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
+    headers = {
+        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
+        "Content-Type": "application/json"
+    }
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
-            async with websockets.connect(uri, extra_headers=headers) as ws:
-                await ws.send(json.dumps({"type": "connection_init"}))
+            async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
+                await ws.send(json.dumps({
+                    "type": "connection_init",
+                    "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
+                }))
                 init_response = await ws.recv()
                 print(f"Exit WebSocket init response: {init_response}")
                 
@@ -240,13 +251,19 @@ def backup_db():
 
 async def monitor_new_pools():
     uri = "wss://streaming.bitquery.io/graphql"
-    headers = {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}
+    headers = {
+        "Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}",
+        "Content-Type": "application/json"
+    }
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
-            async with websockets.connect(uri, extra_headers=headers) as ws:
-                await ws.send(json.dumps({"type": "connection_init"}))
+            async with websockets.connect(uri, extra_headers=headers, subprotocols=["graphql-ws"]) as ws:
+                await ws.send(json.dumps({
+                    "type": "connection_init",
+                    "payload": {"headers": {"Authorization": f"Bearer {os.getenv('BITQUERY_TOKEN')}"}}
+                }))
                 init_response = await ws.recv()
                 print(f"New pools WebSocket init response: {init_response}")
                 
