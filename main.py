@@ -82,12 +82,12 @@ async def bitquery_websocket():
                             Transaction { Hash }
                             Trade {
                                 Buy {
-                                    Address
+                                    Buyer { Address }
                                     AmountInUSD
+                                    Amount
                                     Currency { SmartContract Symbol }
-                                    BaseCurrency { Symbol }
+                                    QuoteCurrency { Symbol }
                                 }
-                                Amount
                             }
                         }
                     }
@@ -104,8 +104,8 @@ async def bitquery_websocket():
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
                         liquidity = await check_liquidity(trade['Trade']['Buy']['Currency']['SmartContract'])
                         if 50000 <= liquidity <= 200000:
-                            pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
-                            if check_notification_cooldown(trade['Trade']['Buy']['Address'], pair):
+                            pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['QuoteCurrency']['Symbol']}"
+                            if check_notification_cooldown(trade['Trade']['Buy']['Buyer']['Address'], pair):
                                 await send_entry_alert(trade)
                                 await save_whale_address(trade)
         except Exception as e:
@@ -121,8 +121,8 @@ async def bitquery_websocket():
 async def send_entry_alert(trade):
     try:
         bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
-        message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Address']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
+        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['QuoteCurrency']['Symbol']}"
+        message = f"🐳 BALİNA GİRİŞİ! {trade['Trade']['Buy']['Buyer']['Address']} {pair} havuzunda {trade['Trade']['Buy']['AmountInUSD']}$ aldı! 🚀"
         await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
     except Exception as e:
         print(f"Telegram send error: {e}")
@@ -131,12 +131,12 @@ async def save_whale_address(trade):
     try:
         conn = sqlite3.connect('whales.db')
         c = conn.cursor()
-        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['BaseCurrency']['Symbol']}"
+        pair = f"{trade['Trade']['Buy']['Currency']['Symbol']}/{trade['Trade']['Buy']['QuoteCurrency']['Symbol']}"
         c.execute('''INSERT INTO whales (address, pair, token0_symbol, token1_symbol, amount_usd, token_amount, entry_time, last_notified, tracked)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (trade['Trade']['Buy']['Address'], pair,
-                   trade['Trade']['Buy']['Currency']['Symbol'], trade['Trade']['Buy']['BaseCurrency']['Symbol'],
-                   trade['Trade']['Buy']['AmountInUSD'], trade['Trade']['Amount'],
+                  (trade['Trade']['Buy']['Buyer']['Address'], pair,
+                   trade['Trade']['Buy']['Currency']['Symbol'], trade['Trade']['Buy']['QuoteCurrency']['Symbol'],
+                   trade['Trade']['Buy']['AmountInUSD'], trade['Trade']['Buy']['Amount'],
                    datetime.now().isoformat(), datetime.now().isoformat(), 1))
         conn.commit()
         conn.close()
@@ -163,16 +163,16 @@ async def check_exit(whale_address, entry_amount, pair):
                 
                 query = """subscription ($whale_address: String!) {
                     EVM(network: bsc) {
-                        DEXTrades(where: {Trade: {Sell: {Address: {is: $whale_address}}}}) {
+                        DEXTrades(where: {Trade: {Sell: {Seller: {Address: {is: $whale_address}}}}}) {
                             Transaction { Hash }
                             Trade {
                                 Sell {
-                                    Address
+                                    Seller { Address }
                                     AmountInUSD
+                                    Amount
                                     Currency { SmartContract Symbol }
-                                    BaseCurrency { Symbol }
+                                    QuoteCurrency { Symbol }
                                 }
-                                Amount
                             }
                         }
                     }
@@ -187,9 +187,9 @@ async def check_exit(whale_address, entry_amount, pair):
                     print(f"Exit WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
                         trade = data['payload']['data']['EVM']['DEXTrades'][0]
-                        if trade['Trade']['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Trade']['Sell']['Address'], pair):
+                        if trade['Trade']['Sell']['Amount'] >= entry_amount * 0.1 and check_notification_cooldown(trade['Trade']['Sell']['Seller']['Address'], pair):
                             await send_exit_alert(trade, entry_amount)
-                            update_whale_status(trade['Trade']['Sell']['Address'])
+                            update_whale_status(trade['Trade']['Sell']['Seller']['Address'])
                             break
         except Exception as e:
             print(f"Exit WebSocket error: {e}")
@@ -204,10 +204,10 @@ async def check_exit(whale_address, entry_amount, pair):
 async def send_exit_alert(trade, entry_amount):
     try:
         bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-        pair = f"{trade['Trade']['Sell']['Currency']['Symbol']}/{trade['Trade']['Sell']['BaseCurrency']['Symbol']}"
-        sell_amount = trade['Trade']['Amount']
-        remaining = await get_wallet_balance(trade['Trade']['Sell']['Address'], trade['Trade']['Sell']['Currency']['SmartContract'])
-        message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Address']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
+        pair = f"{trade['Trade']['Sell']['Currency']['Symbol']}/{trade['Trade']['Sell']['QuoteCurrency']['Symbol']}"
+        sell_amount = trade['Trade']['Sell']['Amount']
+        remaining = await get_wallet_balance(trade['Trade']['Sell']['Seller']['Address'], trade['Trade']['Sell']['Currency']['SmartContract'])
+        message = f"🚨 BALİNA SATIŞI! {trade['Trade']['Sell']['Seller']['Address']} {pair} havuzunda {trade['Trade']['Sell']['AmountInUSD']}$ sattı ({sell_amount} token), elinde {remaining}$ kaldı! 🏃‍♂️"
         await bot.send_message(chat_id=os.getenv('TELEGRAM_CHAT_ID'), text=message)
     except Exception as e:
         print(f"Telegram exit send error: {e}")
@@ -274,7 +274,7 @@ async def monitor_new_pools():
                 
                 query = """subscription {
                     EVM(network: bsc) {
-                        DEXPoolCreated {
+                        PoolCreated {
                             Pool { SmartContract Token0 { Symbol } Token1 { Symbol } }
                         }
                     }
@@ -288,7 +288,7 @@ async def monitor_new_pools():
                     data = json.loads(message)
                     print(f"New pools WebSocket message: {data}")
                     if data.get('type') == 'data' and data.get('payload', {}).get('data'):
-                        pair = data['payload']['data']['EVM']['DEXPoolCreated'][0]['Pool']
+                        pair = data['payload']['data']['EVM']['PoolCreated'][0]['Pool']
                         pair_address = pair['SmartContract']
                         pair_name = f"{pair['Token0']['Symbol']}/{pair['Token1']['Symbol']}"
                         liquidity = await check_liquidity(pair_address)
