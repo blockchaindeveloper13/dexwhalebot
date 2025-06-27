@@ -283,6 +283,12 @@ async def start(update: Update, context):
     await update.message.reply_text("Whale Alert Bot aktif! Balina hareketleri ve yeni havuzlar izleniyor. 🐳")
 
 async def monitor_whales():
+    # Log environment variables for debugging
+    print(f"TELEGRAM_TOKEN: {os.getenv('TELEGRAM_TOKEN')}")
+    print(f"TELEGRAM_CHAT_ID: {os.getenv('TELEGRAM_CHAT_ID')}")
+    print(f"BITQUERY_TOKEN: {os.getenv('BITQUERY_TOKEN')}")
+    print(f"ENVIRONMENT: {os.getenv('ENVIRONMENT')}")
+
     application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
     application.add_handler(CommandHandler("start", start))
     
