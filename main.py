@@ -58,7 +58,7 @@ async def bitquery_websocket():
         query = """subscription {
             EVM(network: bsc) {
                 DEXTrades(where: {Trade: {Buy: {AmountInUSD: {gt: 100000}}}}) {
-                    Transaction/Enclave { Hash }
+                    Transaction { Hash }
                     Trade { 
                         Buyer { Address } 
                         AmountInUSD 
@@ -106,7 +106,7 @@ async def check_exit(whale_address, entry_amount, pair):
         query = f"""subscription {{
             EVM(network: bsc) {{
                 DEXTrades(where: {{Trade: {{Sell: {{Seller: {{Address: {{is: "{whale_address}"}}}}}}}}}) {{
-                    Transaction/Enclave {{ Hash }}
+                    Transaction {{ Hash }}
                     Trade {{ Seller {{ Address }} AmountInUSD Pair {{ SmartContract Token0 {{ Symbol }} Token1 {{ Symbol }} }} Amount }}
                 }}
             }}
